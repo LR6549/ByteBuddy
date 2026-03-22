@@ -252,7 +252,6 @@ namespace ByteBuddy {
             // Gravity: drift to ground, clamp so we never overshoot.
             if (b_y < b_windowBounds.ground) {
                 b_y += 15.f;
-                std::cout << "B_Y: " << b_y << ", b_ground: " << b_windowBounds.ground << std::endl;
             }
             else if (b_y > b_windowBounds.ground) {
                 b_y  = static_cast<float>(b_windowBounds.ground);

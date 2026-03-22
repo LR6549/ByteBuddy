@@ -1,4 +1,3 @@
-#define JFLX_LOGGING_NO_DEBUG
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -12,6 +11,9 @@
 #include <ImGui/imgui.h>
 #include <ImGui/imgui_impl_sdl3.h>
 #include <ImGui/imgui_impl_sdlrenderer3.h>
+
+#define JFLX_LOGGING_NO_DEBUG
+#include <JFLX/Logging.hpp>
 
 #include <cstdio>
 #include <string>
@@ -193,11 +195,8 @@ bool initSDL() {
     return true;
 }
 
-SDL_Window* initWindow(HWND& outHwnd)
-{
-    SDL_WindowFlags flags = SDL_WINDOW_TRANSPARENT
-                          | SDL_WINDOW_BORDERLESS
-                          | SDL_WINDOW_ALWAYS_ON_TOP;
+SDL_Window* initWindow(HWND& outHwnd) {
+    SDL_WindowFlags flags = SDL_WINDOW_TRANSPARENT | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP;
 
     SDL_Window* window = SDL_CreateWindow("Byte Buddy", WINDOW_W, WINDOW_H, flags);
     if (!window)
@@ -225,6 +224,12 @@ SDL_Window* initWindow(HWND& outHwnd)
         ex &= ~WS_EX_APPWINDOW;
         ex |=  WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW;
         SetWindowLongPtrW(outHwnd, GWL_EXSTYLE, ex);
+    }
+
+    SDL_Surface* icon = SDL_LoadBMP((installationDir + "/resources/icon/icon.png").c_str());
+    if (icon) {
+        SDL_SetWindowIcon(window, icon);
+        SDL_DestroySurface(icon);
     }
 
     return window;

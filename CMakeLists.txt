@@ -19,10 +19,19 @@ if(MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+# Absoluten Pfad ins .rc file schreiben
+set(ICON_PATH "${CMAKE_SOURCE_DIR}/resources/icon/icon.ico")
+
+configure_file(
+        "${CMAKE_SOURCE_DIR}/resources/icon/app.rc.in"
+        "${CMAKE_BINARY_DIR}/resources/icon/app.rc"
+)
+
 add_executable(${PROJECT_NAME}
         main.cpp
         include/buddy.hpp
         include/buddy.cpp
+        "${CMAKE_BINARY_DIR}/resources/icon/app.rc"
 )
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
