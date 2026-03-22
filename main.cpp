@@ -1,4 +1,3 @@
-
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL3_ttf/SDL_ttf.h>
@@ -20,6 +19,9 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -356,6 +358,64 @@ std::string ShowBuddyTypePicker()
     return (selectedIndex >= 0) ? gFolderNames[selectedIndex] : "";
 }
 
+static std::string GetConfigPath() {
+    return installationDir + "/buddy_config.ini";
+}
+
+static void SaveSettings() {
+    std::ofstream f(GetConfigPath());
+    if (!f) return;
+
+    f << "buddy_type="        << buddy.getTypeName()                  << "\n";
+    f << "buddy_name="        << gBuddyName                           << "\n";
+    f << "show_buddy="        << (int)gShowBuddy                      << "\n";
+    f << "pos_x="             << buddy.getX()                         << "\n";
+    f << "pos_y="             << buddy.getY()                         << "\n";
+    f << "ground_y="          << buddy.getGroundY()                   << "\n";
+    f << "speed="             << buddy.getSpeed()                     << "\n";
+    f << "scale="             << buddy.getScale()                     << "\n";
+    f << "state_time_max="    << buddy.getStateTimeMax()               << "\n";
+    f << "state_timer_min="   << buddy.getStateTimerMin()              << "\n";
+    f << "state_timer_max="   << buddy.getStateTimerMax()              << "\n";
+    f << "frame_interval="    << buddy.getFrameInterval()              << "\n";
+    f << "direction="         << buddy.getDirection()                  << "\n";
+    f << "flipped="           << buddy.getHorizontallyFlipped()        << "\n";
+    f << "update_dir_idle="   << buddy.getUpdateDirectionWhenIdle()    << "\n";
+}
+
+static void LoadSettings() {
+    std::ifstream f(GetConfigPath());
+    if (!f) return;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        auto sep = line.find('=');
+        if (sep == std::string::npos) continue;
+
+        std::string key = line.substr(0, sep);
+        std::string val = line.substr(sep + 1);
+
+        if      (key == "buddy_type")       buddy.setTypeName(val);
+        else if (key == "buddy_name")     {
+            gBuddyName = val;
+            buddy.setName(gBuddyName);
+        }
+        else if (key == "show_buddy")       gShowBuddy   = std::stoi(val);
+        else if (key == "pos_x")            buddy.setPosition(std::stof(val), buddy.getY());
+        else if (key == "pos_y")            buddy.setPosition(buddy.getX(),   std::stof(val));
+        else if (key == "ground_y")         buddy.setGroundY(std::stof(val));
+        else if (key == "speed")            buddy.setSpeed(std::stof(val));
+        else if (key == "scale")            buddy.setScale(std::stof(val));
+        else if (key == "state_time_max")   buddy.setStateTimeMax(std::stof(val));
+        else if (key == "state_timer_min")  buddy.setStateTimerMin(std::stof(val));
+        else if (key == "state_timer_max")  buddy.setStateTimerMax(std::stof(val));
+        else if (key == "frame_interval")   buddy.setFrameInterval(std::stof(val));
+        else if (key == "direction")        buddy.setDirection(std::stoi(val));
+        else if (key == "flipped")          buddy.setHorizontallyFlipped(std::stoi(val));
+        else if (key == "update_dir_idle")  buddy.setUpdateDirectionWhenIdle(std::stoi(val));
+    }
+}
+
 void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisible, float& mouseX, float& mouseY) {
     if (ImGui::Begin("ByteBuddy_Settings", nullptr, ImGuiWindowFlags_None)) {
         widgetPos = ImGui::GetWindowPos();
@@ -660,6 +720,8 @@ int main(int /*argc*/, char* /*argv*/[]) {
     initJFLXClasses(renderer);
     initBuddy(gBuddyName);
 
+    LoadSettings();
+
     SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &gCurrentDisplayBounds);
     float initGroundY = static_cast<float>((gCurrentDisplayBounds.y + gCurrentDisplayBounds.h) - gWindowOriginY);
     buddy.setGroundY(initGroundY);
@@ -717,14 +779,7 @@ int main(int /*argc*/, char* /*argv*/[]) {
             // displayBounds.h = this monitor's own pixel height (may differ from others)
             // Subtract gWindowOriginY to convert global → window-local
             int newGroundY = (displayBounds.y + displayBounds.h) - gWindowOriginY;
-
-            // Clamp X so the buddy stays within this display's horizontal span (window-local)
-            float newX = std::clamp(
-                buddy.getX(),
-                static_cast<float>(displayBounds.x - gWindowOriginX),
-                static_cast<float>((displayBounds.x + displayBounds.w) - gWindowOriginX - 1)
-            );
-            buddy.setPosition(newX, newGroundY);
+            buddy.setPosition(buddy.getX(), newGroundY);
 
             // Keep window bounds reflecting the full virtual canvas
             ByteBuddy::windowBounds wBounds{ WINDOW_H, WINDOW_W, newGroundY };
@@ -763,6 +818,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
         if (elapsedMS < 60)
             SDL_Delay((Uint32)(60 - elapsedMS));
     }
+
+
+    SaveSettings();
+
 
     TrayIcon_Destroy();
 
