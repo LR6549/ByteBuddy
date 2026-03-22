@@ -227,4 +227,4 @@ Walk and Run pick a destination (50 % mouse position, 50 % random X within windo
 
 ---
 
-*Made with ☕ and too many late nights.*
+*Made with Paulaner Spezi and not much Sleep <3.*
