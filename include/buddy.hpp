@@ -122,7 +122,8 @@ namespace ByteBuddy {
 
         windowBounds b_windowBounds;
 
-        std::string b_name     = "cat";
+        std::string b_name         = "cat";
+        std::string b_typeName     = "cat";
         float       b_x        = 0.f;
         float       b_y        = 0.f;
         float       b_textureW = 0.f;  ///< Set each frame by updateTextureSize()
@@ -133,6 +134,7 @@ namespace ByteBuddy {
         /// Walk/Run destination. Chosen randomly when entering those states
         /// (25 % chance: mouseX, 75 % chance: random X within window width).
         float b_targetX = 0.f;
+        float b_targetY = 0.f;
 
         float b_stateTimer   = 0.f;
         float b_stateTimeMax = 300.f;
@@ -147,6 +149,9 @@ namespace ByteBuddy {
         int   b_frame         = 0;
         float b_frameTimer    = 0.f;
         float b_frameInterval = 2.f;  ///< Ticks between frame advances (2 ≈ 30 fps at 60 fps)
+
+        bool b_updateDirectionWhenIdle = true;
+        bool b_horizontallyFlipped = false;
 
         /// Pre-computed keyframes for the current jump arc.
         /// deque used so pop_front() is O(1).
@@ -183,7 +188,7 @@ namespace ByteBuddy {
          * Each entry stores the world-space position and the JumpPhase
          * whose t-range contains that step's normalised arc position.
          */
-        void updateTrajectory(float targetX, float targetY, float groundY);
+        void updateTrajectory(float groundY);
 
         /// Updates b_direction so the Buddy faces b_targetX.
         /// Skipped for Clean_0, Clean_1, and Sleep (flipping mid-clip looks wrong).
@@ -205,9 +210,11 @@ namespace ByteBuddy {
 
         /// Renders the sprite centered on (b_x, b_y), scaled by b_scale.
         /// Applies SDL_FLIP_HORIZONTAL when b_direction == -1 (facing left).
-        void renderBuddy();
+        void renderBuddy() const;
 
         void nextState();
+
+        void setName(const std::string &name);
 
         /// Queries b_textureW / b_textureH from the texture handler each frame.
         /// Must be called before renderBuddy() because sprite sizes can vary per state.
@@ -215,10 +222,10 @@ namespace ByteBuddy {
 
         // --- Setters ---------------------------------------------------------
 
-        void setName(const std::string& name);
+        void setTypeName(const std::string& name);
         void setTextureHandler(JFLX::SDL3::TextureHandler* th);
         void setTextRenderer(JFLX::SDL3::TextRenderer* tr);
-        void setWindowBounds(const windowBounds& bounds);
+        void setWindowBounds(const windowBounds bounds);
 
         /// Overrides the current state. Does NOT reset b_frame — use setAnimation() for that.
         void setState(BuddyState state, float mouseX, float mouseY);
@@ -236,25 +243,34 @@ namespace ByteBuddy {
         void setStateTimerMax(float ticks);
         void setStateTimeMax(float ticks);
 
+        void setHorizontallyFlipped(bool flip);
+        void setUpdateDirectionWhenIdle(bool flip);
+
+        std::string getName() const;
+
         /// Ticks between frame advances. Lower = faster animation. Must be > 0.
         void setFrameInterval(float ticks);
 
         // --- Getters ---------------------------------------------------------
 
-        [[nodiscard]] float       getX()             const;
-        [[nodiscard]] float       getY()             const;
-        [[nodiscard]] std::string getName()          const;
-        [[nodiscard]] std::string getState()         const;
-        [[nodiscard]] JumpPhase   getJumpPhase()     const;
-        [[nodiscard]] float       getSpeed()         const;
-        [[nodiscard]] float       getScale()         const;
-        [[nodiscard]] float       getStateTimeMax()  const;
-        [[nodiscard]] int         getStateTimerMax() const;
-        [[nodiscard]] int         getStateTimerMin() const;
-        [[nodiscard]] float       getFrameInterval() const;
-        [[nodiscard]] int         getDirection()     const;
-        [[nodiscard]] int         getFrame()         const;
-        [[nodiscard]] int         getGroundY()       const;
+        [[nodiscard]] float       getX()                    const;
+        [[nodiscard]] float       getY()                    const;
+        [[nodiscard]] std::string getTypeName()             const;
+        [[nodiscard]] std::string getState()                const;
+        [[nodiscard]] JumpPhase   getJumpPhase()            const;
+        [[nodiscard]] float       getSpeed()                const;
+        [[nodiscard]] float       getScale()                const;
+        [[nodiscard]] float       getStateTimeMax()         const;
+        [[nodiscard]] int         getStateTimerMax()        const;
+        [[nodiscard]] int         getStateTimerMin()        const;
+        [[nodiscard]] float       getFrameInterval()        const;
+        [[nodiscard]] int         getDirection()            const;
+        [[nodiscard]] int         getFrame()                const;
+        [[nodiscard]] int         getGroundY()              const;
+        [[nodiscard]] std::array<int, 2> getTarget()        const;
+
+        bool getHorizontallyFlipped() const;
+        bool getUpdateDirectionWhenIdle() const;
     };
 
 } // namespace ByteBuddy

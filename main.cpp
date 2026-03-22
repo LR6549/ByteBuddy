@@ -15,6 +15,9 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
+#include <unordered_map>
+#include <algorithm>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -33,12 +36,16 @@ static int WINDOW_H = 1080;
 static constexpr float WIDGET_W = 375.0f;
 static constexpr float WIDGET_H = 475.0f;
 
-static bool        gRunning       = true;
-static bool        gShowBuddy     = true;
-static bool        gWindowVisible = true;
-static bool        gShowSettings  = false;
-static SDL_Window* gSdlWindow     = nullptr;
-static std::string gBuddyName     = "cat";
+static bool                     gRunning       = true;
+static int                      gWindowOriginX = 0;
+static int                      gWindowOriginY = 0;
+static bool                     gShowBuddy     = true;
+static bool                     gWindowVisible = true;
+static bool                     gShowSettings  = false;
+static SDL_Window*              gSdlWindow     = nullptr;
+static std::string              gBuddyName     = "cat";
+static std::vector<std::string> gFolderNames = {};
+static SDL_Rect                 gCurrentDisplayBounds = { 0, 0, 1920, 1080 };
 
 JFLX::SDL3::AudioHandler   audioHandler;
 JFLX::SDL3::TextRenderer   textRenderer;
@@ -62,8 +69,9 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_HOTKEY && wp == 1)
     {
         gShowSettings = !gShowSettings;
-        if (gShowSettings)
+        if (gShowSettings) {
             SDL_RaiseWindow(gSdlWindow);
+        }
         return 0;
     }
 
@@ -79,14 +87,23 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             GetCursorPos(&pt);
             HMENU menu = CreatePopupMenu();
             AppendMenuW(menu, MF_STRING, 1001, L"Show");
-            AppendMenuW(menu, MF_STRING, 1002, L"Quit");
+            AppendMenuW(menu, MF_STRING, 1002, L"Settings");
+            AppendMenuW(menu, MF_STRING, 1003, L"Quit");
             // SetForegroundWindow is required so the menu dismisses on click-away.
             SetForegroundWindow(hwnd);
             int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY,
                                      pt.x, pt.y, 0, hwnd, nullptr);
             DestroyMenu(menu);
-            if      (cmd == 1001) gWindowVisible = true;
-            else if (cmd == 1002) gRunning = false;
+            if      (cmd == 1001) {
+                gWindowVisible = true;
+            }
+            else if (cmd == 1002) {
+                gShowSettings = true;
+                SDL_RaiseWindow(gSdlWindow);
+            }
+            else if (cmd == 1003) {
+                gRunning = false;
+            }
         }
         return 0;
     }
@@ -140,19 +157,38 @@ static void TrayIcon_Destroy()
     DestroyWindow(g_hwnd);
 }
 
-bool initSDL()
-{
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
-    {
+bool initSDL() {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS)) {
         SDL_Log("SDL_Init failed: %s", SDL_GetError());
         return false;
     }
 
-    // Match the overlay exactly to the primary monitor's resolution.
-    SDL_DisplayID displayID = SDL_GetPrimaryDisplay();
-    const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(displayID);
-    WINDOW_W = mode->w;
-    WINDOW_H = mode->h;
+    // Get bounding rect across ALL displays
+    int displayCount = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+
+    int minX = INT_MAX, minY = INT_MAX;
+    int maxX = INT_MIN, maxY = INT_MIN;
+
+    for (int i = 0; i < displayCount; ++i)
+    {
+        SDL_Rect bounds{};
+        if (SDL_GetDisplayBounds(displays[i], &bounds)) {
+            minX = min(minX, bounds.x);
+            minY = min(minY, bounds.y);
+            maxX = max(maxX, bounds.x + bounds.w);
+            maxY = max(maxY, bounds.y + bounds.h);
+        }
+    }
+    SDL_free(displays);
+
+    WINDOW_W = maxX - minX;
+    WINDOW_H = maxY - minY;
+
+    // Store the top-left origin so we can position the window correctly
+    // (monitors may not start at 0,0 — e.g. a secondary monitor left of primary)
+    gWindowOriginX = minX;
+    gWindowOriginY = minY;
 
     return true;
 }
@@ -163,13 +199,15 @@ SDL_Window* initWindow(HWND& outHwnd)
                           | SDL_WINDOW_BORDERLESS
                           | SDL_WINDOW_ALWAYS_ON_TOP;
 
-    SDL_Window* window = SDL_CreateWindow("DesktopPet", WINDOW_W, WINDOW_H, flags);
+    SDL_Window* window = SDL_CreateWindow("Byte Buddy", WINDOW_W, WINDOW_H, flags);
     if (!window)
     {
         SDL_Log("SDL_CreateWindow failed: %s", SDL_GetError());
         SDL_Quit();
         return nullptr;
     }
+
+    SDL_SetWindowPosition(window, gWindowOriginX, gWindowOriginY);
 
     gSdlWindow = window;
     SDL_SetWindowMouseGrab(window, false);
@@ -225,31 +263,96 @@ ImGuiIO& initImGui(SDL_Window* window, SDL_Renderer* renderer)
     return io;
 }
 
-void initJFLXClasses(SDL_Renderer* r)
-{
+std::vector<std::string> GetAllFolderNames(const fs::path& rootPath) {
+    std::vector<std::string> folders;
+
+    if (!fs::exists(rootPath) || !fs::is_directory(rootPath)) {
+        return folders;
+    }
+
+    for (const auto& entry : fs::directory_iterator( rootPath, fs::directory_options::skip_permission_denied)) {
+        if (entry.is_directory()) {
+            folders.push_back(entry.path().filename().string());
+        }
+    }
+
+    return folders;
+}
+
+void initJFLXClasses(SDL_Renderer* r) {
     textRenderer.setDefaultRenderer(r);
     textRenderer.loadFont(installationDir + "/resources/font/font.ttf");
 
     textureHandler.setRenderer(r);
-    textureHandler.loadTextureFolder(installationDir + "\\resources\\textures\\");
+    textureHandler.loadTextureFolder(installationDir + "/resources/textures/");
 
     audioHandler.loadSounds(installationDir + "/resources/sfx");
+
+    gFolderNames = GetAllFolderNames(installationDir + "/resources/textures/");
 }
 
-void initBuddy(std::string& name)
-{
-    buddy.setName(name);
+void initBuddy(std::string& name) {
+    buddy.setTypeName(name);
     buddy.setTextureHandler(&textureHandler);
     buddy.setTextRenderer(&textRenderer);
-    ByteBuddy::windowBounds wBounds{ WINDOW_H, WINDOW_W, WINDOW_H - 80 };
+    ByteBuddy::windowBounds wBounds{ WINDOW_H, WINDOW_W, WINDOW_H};
     buddy.setWindowBounds(wBounds);
-    buddy.setPosition(WINDOW_W * 0.5f, WINDOW_H - 80);
+    buddy.setPosition(WINDOW_W * 0.5f, WINDOW_H);
 }
 
-void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisible, float& mouseX, float& mouseY)
-{
-    if (ImGui::Begin("ByteBuddy_Settings", nullptr, ImGuiWindowFlags_None))
+SDL_Rect GetDisplayBoundsForPoint(float globalX, float globalY) {
+    int displayCount = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&displayCount);
+
+    SDL_Rect result{};
+    // Fallback to primary
+    SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &result);
+
+    for (int i = 0; i < displayCount; ++i)
     {
+        SDL_Rect bounds{};
+        if (SDL_GetDisplayBounds(displays[i], &bounds))
+        {
+            if (globalX >= bounds.x && globalX < bounds.x + bounds.w &&
+                globalY >= bounds.y && globalY < bounds.y + bounds.h)
+            {
+                result = bounds;
+                break;
+            }
+        }
+    }
+
+    SDL_free(displays);
+    return result;
+}
+
+std::string ShowBuddyTypePicker()
+{
+    static int selectedIndex = -1;
+
+    const char* previewLabel = (selectedIndex >= 0) ? gFolderNames[selectedIndex].c_str() : "-- Buddy Type --";
+
+    ImGui::TextUnformatted("Buddy Type ");
+    ImGui::SameLine(200.0f);
+
+    if (ImGui::BeginCombo("##buddyType", previewLabel))
+    {
+        for (int i = 0; i < static_cast<int>(gFolderNames.size()); ++i)
+        {
+            bool isSelected = (selectedIndex == i);
+            if (ImGui::Selectable(gFolderNames[i].c_str(), isSelected))
+                selectedIndex = i;
+            if (isSelected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    return (selectedIndex >= 0) ? gFolderNames[selectedIndex] : "";
+}
+
+void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisible, float& mouseX, float& mouseY) {
+    if (ImGui::Begin("ByteBuddy_Settings", nullptr, ImGuiWindowFlags_None)) {
         widgetPos = ImGui::GetWindowPos();
 
         ImGui::TextUnformatted("ByteBuddy##Settings");
@@ -266,16 +369,26 @@ void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisib
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Buddy name — confirmed with Enter
+        ImGui::TextUnformatted("Buddy: ");
+
+        // --- Buddy Type (folders) ---
+        std::string selectedType = ShowBuddyTypePicker();
+        if (!selectedType.empty() && selectedType != buddy.getTypeName()) {
+            buddy.setTypeName(selectedType);
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // --- Buddy Name ---
         ImGui::TextUnformatted("Buddy Name");
         ImGui::SameLine(200.0f);
         static char nameBuffer[128] = "cat";
         ImGui::SetNextItemWidth(120.0f);
-        if (ImGui::InputText("##buddyname", nameBuffer, sizeof(nameBuffer),
-                             ImGuiInputTextFlags_EnterReturnsTrue))
-        {
+        if (ImGui::InputText("##buddyname", nameBuffer, sizeof(nameBuffer),ImGuiInputTextFlags_EnterReturnsTrue)) {
             gBuddyName = nameBuffer;
-            buddy.setName(gBuddyName);
+            buddy.setName(gBuddyName);   // setName instead of setTypeName
         }
 
         ImGui::Spacing();
@@ -403,9 +516,27 @@ void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisib
             ImGui::TextUnformatted("Facing");
             ImGui::SameLine(200.0f);
             // Label reflects current state so the button reads as a toggle, not an action.
-            const char* dirLabel = (dir == 1) ? "Right (+1)##dir" : "Left  (-1)##dir";
+            const char* dirLabel = (dir == -1) ? "Right##dir" : "Left##dir";
             if (ImGui::Button(dirLabel, { 90.0f, 0 }))
-                buddy.setDirection(dir == 1 ? -1 : 1);
+                buddy.setDirection(dir * -1);
+        }
+        {
+            int flip = buddy.getHorizontallyFlipped();
+            ImGui::TextUnformatted("Render Flipped");
+            ImGui::SameLine(200.0f);
+            // Label reflects current state so the button reads as a toggle, not an action.
+            const char* flipLabel = (flip == 1) ? "Normal##flip" : "Flipped##flip";
+            if (ImGui::Button(flipLabel, { 90.0f, 0 }))
+                buddy.setHorizontallyFlipped(!flip);
+        }
+        {
+            int updateDirection = buddy.getUpdateDirectionWhenIdle();
+            ImGui::TextUnformatted("Update Direction When Idle");
+            ImGui::SameLine(200.0f);
+            // Label reflects current state so the button reads as a toggle, not an action.
+            const char* updateDirectioLabel = (updateDirection == 1) ? "Update##updateDirection" : "No Update##updateDirection";
+            if (ImGui::Button(updateDirectioLabel, { 90.0f, 0 }))
+                buddy.setUpdateDirectionWhenIdle(!updateDirection);
         }
 
         ImGui::Spacing();
@@ -438,6 +569,17 @@ void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisib
             ImGui::SameLine(200.0f);
             ImGui::Text("%d", buddy.getFrame());
         }
+        {
+            ImGui::TextUnformatted("TargetX");
+            ImGui::SameLine(200.0f);
+            ImGui::Text("%d", buddy.getTarget()[0]);
+        }
+        {
+            ImGui::TextUnformatted("TargetY");
+            ImGui::SameLine(200.0f);
+            ImGui::Text("%d", buddy.getTarget()[1]);
+        }
+
 
         // Jump phase is only meaningful while the Buddy is jumping.
         if (buddy.getState() == "jump")
@@ -481,8 +623,7 @@ void renderImGuiSettings(ImVec2& widgetPos, bool& firstFrame, bool& gWindowVisib
     ImGui::End();
 }
 
-int main(int /*argc*/, char* /*argv*/[])
-{
+int main(int /*argc*/, char* /*argv*/[]) {
     if (!initSDL())  return 1;
     if (!TTF_Init()) return 1;
 
@@ -514,24 +655,36 @@ int main(int /*argc*/, char* /*argv*/[])
     initJFLXClasses(renderer);
     initBuddy(gBuddyName);
 
+    SDL_GetDisplayBounds(SDL_GetPrimaryDisplay(), &gCurrentDisplayBounds);
+    float initGroundY = static_cast<float>((gCurrentDisplayBounds.y + gCurrentDisplayBounds.h) - gWindowOriginY);
+    buddy.setGroundY(initGroundY);
+    buddy.setPosition(static_cast<float>(gCurrentDisplayBounds.x - gWindowOriginX + gCurrentDisplayBounds.w / 2), initGroundY);
+
     ImGui::SetNextWindowPos(widgetPos, firstFrame ? ImGuiCond_Always : ImGuiCond_Once);
     ImGui::SetNextWindowSize({ WIDGET_W, WIDGET_H });
     ImGui::SetNextWindowBgAlpha(0.75f);
 
-    while (gRunning)
-    {
+    while (gRunning) {
         Uint64 start = SDL_GetPerformanceCounter();
 
         TrayIcon_PumpMessages();
 
         SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
+        while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
+            if (event.type == SDL_EVENT_QUIT) {
                 gRunning = false;
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE)
+            }
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
                 gWindowVisible = false;
+            }
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                gShowSettings = false;
+            }
+            if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
+                gShowSettings = true;
+                SDL_RaiseWindow(gSdlWindow);
+            }
         }
 
         if (gWindowVisible) SDL_ShowWindow(window);
@@ -546,16 +699,37 @@ int main(int /*argc*/, char* /*argv*/[])
 
         float mouseX, mouseY;
         SDL_GetGlobalMouseState(&mouseX, &mouseY);
+        float localMouseX = mouseX - gWindowOriginX;
+        float localMouseY = mouseY - gWindowOriginY;
+
+        // --- Display change detection ---
+        SDL_Rect displayBounds = GetDisplayBoundsForPoint(mouseX, mouseY);
+        if (displayBounds.x != gCurrentDisplayBounds.x || displayBounds.y != gCurrentDisplayBounds.y || displayBounds.w != gCurrentDisplayBounds.w || displayBounds.h != gCurrentDisplayBounds.h) {
+            gCurrentDisplayBounds = displayBounds;
+
+            // Bottom edge of THIS display in window-local render space.
+            // displayBounds.y = global top of this monitor
+            // displayBounds.h = this monitor's own pixel height (may differ from others)
+            // Subtract gWindowOriginY to convert global → window-local
+            int newGroundY = (displayBounds.y + displayBounds.h) - gWindowOriginY;
+
+            // Clamp X so the buddy stays within this display's horizontal span (window-local)
+            float newX = std::clamp(
+                buddy.getX(),
+                static_cast<float>(displayBounds.x - gWindowOriginX),
+                static_cast<float>((displayBounds.x + displayBounds.w) - gWindowOriginX - 1)
+            );
+            buddy.setPosition(newX, newGroundY);
+
+            // Keep window bounds reflecting the full virtual canvas
+            ByteBuddy::windowBounds wBounds{ WINDOW_H, WINDOW_W, newGroundY };
+            buddy.setWindowBounds(wBounds);
+        }
 
         // Disable click-through while the cursor is over the settings widget.
-        bool mouseOverWidget = gShowSettings
-            && (mouseX >= widgetPos.x) && (mouseX <= widgetPos.x + WIDGET_W)
-            && (mouseY >= widgetPos.y) && (mouseY <= widgetPos.y + WIDGET_H);
+        bool mouseOverWidget = gShowSettings && (localMouseX >= widgetPos.x) && (localMouseX <= widgetPos.x + WIDGET_W) && (localMouseY >= widgetPos.y) && (localMouseY <= widgetPos.y + WIDGET_H);
 
-        bool imguiWantsInput = io.WantCaptureMouse
-            || io.WantCaptureKeyboard
-            || ImGui::IsAnyItemActive()
-            || mouseOverWidget;
+        bool imguiWantsInput = io.WantCaptureMouse || io.WantCaptureKeyboard || ImGui::IsAnyItemActive() || mouseOverWidget;
         setClickThrough(!imguiWantsInput);
 
         ImGui_ImplSDLRenderer3_NewFrame();
@@ -571,7 +745,7 @@ int main(int /*argc*/, char* /*argv*/[])
 
         if (gShowBuddy)
         {
-            buddy.updateBuddy(mouseX, mouseY);
+            buddy.updateBuddy(localMouseX, localMouseY);
             buddy.renderBuddy();
         }
 
